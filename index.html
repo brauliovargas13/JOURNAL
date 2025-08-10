@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Trading Calendar</title>
+    <meta name="color-scheme" content="dark light">
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body { background: #0c121b; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+
+      function formatCurrency(n) {
+        const sign = n < 0 ? "-" : "";
+        const v = Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+        return sign + "$" + v;
+      }
+      function classNames(...xs){ return xs.filter(Boolean).join(" "); }
+
+      function getMonthRange(year, monthIndex0) {
+        const first = new Date(Date.UTC(year, monthIndex0, 1));
+        const last = new Date(Date.UTC(year, monthIndex0 + 1, 0));
+        const from = first.toISOString().slice(0, 10);
+        const to = last.toISOString().slice(0, 10);
+        return { first, last, from, to };
+      }
+      function getMonthGrid(year, monthIndex0) {
+        const firstGridDate = new Date(Date.UTC(year, monthIndex0, 1));
+        const sundayOffset = firstGridDate.getUTCDay(); // 0=Sun..6=Sat
+        const last = new Date(Date.UTC(year, monthIndex0 + 1, 0));
+        const daysInMonth = last.getUTCDate();
+        const cells = [];
+        for (let i=0;i<sundayOffset;i++) cells.push({ date: null, dayNum: null });
+        for (let d=1; d<=daysInMonth; d++) {
+          const iso = new Date(Date.UTC(year, monthIndex0, d)).toISOString().slice(0,10);
+          cells.push({ date: iso, dayNum: d });
+        }
+        while (cells.length % 7 !== 0) cells.push({ date: null, dayNum: null });
+        while (cells.length < 42) cells.push({ date: null, dayNum: null });
+        return cells;
+      }
+
+      async function fetchTrades(from, to) {
+        try {
+          const res = await fetch("./trades.json", { cache: "no-store" });
+          if (res.ok) return await res.json();
+        } catch {}
+        return [];
+      }
+
+      function App(){
+        const now = new Date();
+        const [year, setYear] = useState(now.getUTCFullYear());
+        const [month, setMonth] = useState(now.getUTCMonth());
+        const [symbol, setSymbol] = useState("");
+        const [trades, setTrades] = useState([]);
+        const [selectedDay, setSelectedDay] = useState(null);
+        const range = useMemo(()=> getMonthRange(year, month), [year, month]);
+
+        useEffect(()=>{
+          fetchTrades(range.from, range.to).then(all => {
+            const filtered = symbol ? all.filter(t=>t.symbol===symbol) : all;
+            setTrades(filtered.filter(t=>t.date >= range.from && t.date <= range.to));
+          });
+        }, [range.from, range.to, symbol]);
+
+        const byDay = useMemo(()=>{
+          const m = {};
+          for (const t of trades) {
+            if (!m[t.date]) m[t.date] = { pnl: 0, count: 0, trades: [] };
+            m[t.date].pnl += t.pnl;
+            m[t.date].count += 1;
+            m[t.date].trades.push(t);
+          }
+          return m;
+        }, [trades]);
+
+        const totalMonth = useMemo(()=> trades.reduce((s,t)=> s+t.pnl, 0), [trades]);
+        const grid = useMemo(()=> getMonthGrid(year, month), [year, month]);
+        function prevMonth(){ const d=new Date(Date.UTC(year,month,1)); d.setUTCMonth(month-1); setYear(d.getUTCFullYear()); setMonth(d.getUTCMonth()); }
+        function nextMonth(){ const d=new Date(Date.UTC(year,month,1)); d.setUTCMonth(month+1); setYear(d.getUTCFullYear()); setMonth(d.getUTCMonth()); }
+        const monthLabel = new Date(Date.UTC(year, month, 1)).toLocaleString(undefined,{month:"long", year:"numeric"});
+
+        return (
+          <div className="min-h-screen w-full text-gray-200">
+            <div className="flex items-center gap-3 border-b border-white/5 px-4 py-3">
+              <div className="text-sm font-semibold bg-emerald-500/10 text-emerald-300 px-3 py-1 rounded-full">Symbol</div>
+              <select className="bg-transparent outline-none text-sm px-2 py-1 rounded hover:bg-white/5"
+                      value={symbol} onChange={(e)=> setSymbol(e.target.value)}>
+                <option value="" className="bg-[#111827]">All</option>
+                <option value="NQ" className="bg-[#111827]">/NQ</option>
+                <option value="GC" className="bg-[#111827]">/GC</option>
+                <option value="ES" className="bg-[#111827]">/ES</option>
+              </select>
+              <div className="ml-auto flex items-center gap-2">
+                <button onClick={prevMonth} className="px-3 py-1 rounded bg-white/5 hover:bg-white/10">◀</button>
+                <div className="text-lg font-semibold capitalize">{monthLabel}</div>
+                <button onClick={nextMonth} className="px-3 py-1 rounded bg-white/5 hover:bg-white/10">▶</button>
+                <div className="ml-3 text-emerald-300 font-semibold">{formatCurrency(totalMonth)}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-7 text-center text-xs uppercase tracking-wider text-gray-400 px-4 py-2">
+              <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            </div>
+
+            <div className="grid grid-cols-7 gap-px bg-black/10 px-4">
+              {grid.map((cell, idx)=>{
+                const data = cell.date ? byDay[cell.date] : undefined;
+                const pnl = data?.pnl ?? 0;
+                const positive = pnl > 0, negative = pnl < 0;
+                return (
+                  <div key={idx}
+                       onClick={()=> cell.date && data && setSelectedDay(cell.date)}
+                       className={classNames(
+                         "aspect-[1.1] min-h-[120px] bg-[#0e1622] hover:ring-2 hover:ring-white/10 transition relative rounded",
+                         data && positive && "bg-emerald-700/40",
+                         data && negative && "bg-rose-700/40"
+                       )}>
+                    <div className="absolute top-2 left-2 text-xs text-gray-400">{cell.dayNum ?? ""}</div>
+                    {data && (
+                      <div className="absolute bottom-2 left-2 text-sm">
+                        <div className="font-semibold">{formatCurrency(pnl)}</div>
+                        <div className="text-xs text-gray-300">{data.count} Trade{data.count !== 1 ? "s" : ""}</div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {selectedDay && (
+              <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center sm:justify-center p-4 z-50" onClick={()=> setSelectedDay(null)}>
+                <div className="w-full max-w-2xl bg-[#0e1622] rounded-2xl shadow-2xl border border-white/10" onClick={(e)=> e.stopPropagation()}>
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
+                    <div className="font-semibold">{new Date(selectedDay).toLocaleDateString()}</div>
+                    <button className="px-3 py-1 bg-white/5 rounded hover:bg-white/10" onClick={()=> setSelectedDay(null)}>Close</button>
+                  </div>
+                  <DayDetails date={selectedDay} trades={byDay[selectedDay]?.trades ?? []} />
+                </div>
+              </div>
+            )}
+
+            <div className="px-4 py-6 text-xs text-gray-500">Free & self‑hosted. Edit <code>trades.json</code> via the sync script.</div>
+          </div>
+        );
+      }
+
+      function DayDetails({ date, trades }){
+        const total = trades.reduce((s,t)=> s+t.pnl, 0);
+        return (
+          <div className="px-5 py-4">
+            <div className="mb-3 text-sm text-gray-300">{trades.length} trade{trades.length !== 1 ? "s" : ""} | Total {formatCurrency(total)}</div>
+            <div className="max-h-[50vh] overflow-auto divide-y divide-white/5">
+              {trades.map(t=> (
+                <div key={t.id} className="py-3 flex items-center justify-between">
+                  <div className="text-sm">
+                    <div className="font-medium">{t.symbol} · {t.side} · {t.qty}</div>
+                    <div className="text-gray-400">{t.entryPrice} → {t.exitPrice}</div>
+                  </div>
+                  <div className={t.pnl>0 ? "text-sm font-semibold text-emerald-300" : "text-sm font-semibold text-rose-300"}>{formatCurrency(t.pnl)}</div>
+                </div>
+              ))}
+              {trades.length === 0 && (<div className="py-8 text-center text-gray-400">No trades</div>)}
+            </div>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+    </script>
+  </body>
+</html>
